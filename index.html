@@ -1,0 +1,488 @@
+import { useState, useRef, useEffect, useCallback } from “react”;
+import * as Tone from “tone”;
+
+// ── AI Face Rating ────────────────────────────────────────────────────────────
+async function rateFace(base64jpeg) {
+const res = await fetch(“https://api.anthropic.com/v1/messages”, {
+method: “POST”,
+headers: { “Content-Type”: “application/json” },
+body: JSON.stringify({
+model: “claude-sonnet-4-20250514”,
+max_tokens: 600,
+messages: [{
+role: “user”,
+content: [
+{ type: “image”, source: { type: “base64”, media_type: “image/jpeg”, data: base64jpeg } },
+{ type: “text”, text: `You're a fun, hype face-rating judge for a phone game. Be playful and dramatic, never mean or offensive. Respond ONLY with raw JSON, no markdown fences: {"overall":number 1-100,"charisma":number,"vibe":number,"expression":number,"photogenic":number,"verdict":"one fun sentence max 12 words","faceDetected":boolean}` }
+]
+}]
+})
+});
+const d = await res.json();
+const txt = d.content?.find(b => b.type === “text”)?.text || “{}”;
+try { return JSON.parse(txt.trim()); }
+catch { return { overall: 50, charisma: 50, vibe: 50, expression: 50, photogenic: 50, verdict: “Unique specimen detected.”, faceDetected: true }; }
+}
+
+function captureFace(video) {
+const c = document.createElement(“canvas”);
+c.width = 360; c.height = 480;
+const ctx = c.getContext(“2d”);
+// mirror flip
+ctx.translate(360, 0); ctx.scale(-1, 1);
+ctx.drawImage(video, 0, 0, 360, 480);
+return c.toDataURL(“image/jpeg”, 0.82).split(”,”)[1];
+}
+
+// ── Music ─────────────────────────────────────────────────────────────────────
+let toneStarted = false;
+async function ensureTone() {
+if (!toneStarted) { await Tone.start(); toneStarted = true; }
+}
+
+async function playBattleMusic() {
+await ensureTone();
+Tone.Transport.stop(); Tone.Transport.cancel();
+Tone.Transport.bpm.value = 145;
+const kick = new Tone.MembraneSynth({ pitchDecay: 0.04, octaves: 7 }).toDestination();
+kick.volume.value = -6;
+const snare = new Tone.NoiseSynth({ noise: { type: “white” }, envelope: { attack: 0.001, decay: 0.12, sustain: 0, release: 0.05 } }).toDestination();
+snare.volume.value = -14;
+const bass = new Tone.Synth({ oscillator: { type: “triangle” }, envelope: { attack: 0.02, decay: 0.3, sustain: 0.4, release: 0.1 } }).toDestination();
+bass.volume.value = -16;
+const arp = new Tone.Synth({ oscillator: { type: “sawtooth” }, envelope: { attack: 0.005, decay: 0.08, sustain: 0.1, release: 0.05 } }).toDestination();
+arp.volume.value = -22;
+const kSeq = new Tone.Sequence(t => kick.triggerAttackRelease(“C1”,“8n”,t),[“C1”,null,null,null,“C1”,null,“C1”,null],“8n”);
+const sSeq = new Tone.Sequence(t => snare.triggerAttackRelease(“8n”,t),[null,null,“1n”,null,null,null,“1n”,null],“8n”);
+const bSeq = new Tone.Sequence((t,n) => bass.triggerAttackRelease(n,“4n”,t),[“C2”,“C2”,“G1”,“Ab1”,“F1”,“G1”,“Bb1”,“C2”],“4n”);
+const aSeq = new Tone.Sequence((t,n) => arp.triggerAttackRelease(n,“32n”,t),[“C4”,“Eb4”,“G4”,“Bb4”,“C5”,“Bb4”,“Ab4”,“G4”,“F4”,“Eb4”,“C4”,“Eb4”],“8n”);
+[kSeq,sSeq,bSeq,aSeq].forEach(s => s.start(0));
+Tone.Transport.start();
+return () => { Tone.Transport.stop(); Tone.Transport.cancel(); [kick,snare,bass,arp,kSeq,sSeq,bSeq,aSeq].forEach(x => { try{x.dispose()}catch{} }); };
+}
+
+async function playResultStinger(won) {
+await ensureTone();
+Tone.Transport.stop(); Tone.Transport.cancel();
+const s = new Tone.PolySynth(Tone.Synth,{oscillator:{type:“triangle”},envelope:{attack:0.05,decay:0.4,sustain:0.4,release:0.6}}).toDestination();
+s.volume.value = -14;
+if (won) {
+const part = new Tone.Part((t,n) => s.triggerAttackRelease(n.n,n.d,t),
+[{time:0,n:“C4”,d:“8n”},{time:“8n”,n:“E4”,d:“8n”},{time:“4n”,n:“G4”,d:“8n”},{time:“4n+8n”,n:“C5”,d:“4n”},{time:“2n+4n”,n:[“C4”,“E4”,“G4”,“C5”],d:“2n”}]);
+part.start(0); Tone.Transport.start();
+return () => { try{s.dispose();part.dispose()}catch{} };
+} else {
+const part = new Tone.Part((t,n) => s.triggerAttackRelease(n.n,n.d,t),
+[{time:0,n:[“G3”,“Bb3”,“Db4”],d:“4n”},{time:“4n”,n:[“F3”,“Ab3”,“C4”],d:“2n”}]);
+part.start(0); Tone.Transport.start();
+return () => { try{s.dispose();part.dispose()}catch{} };
+}
+}
+
+// ── Scan Canvas ───────────────────────────────────────────────────────────────
+function ScanOverlay({ active, progress }) {
+const ref = useRef(null);
+const raf = useRef(null);
+const frame = useRef(0);
+const dots = useRef([]);
+
+useEffect(() => {
+const canvas = ref.current; if (!canvas) return;
+const ctx = canvas.getContext(“2d”);
+const W = canvas.width, H = canvas.height;
+const cx = W/2, cy = H*0.46;
+const rx = W*0.33, ry = H*0.38;
+// Build oval dot grid
+const d = [];
+for (let y = cy-ry; y <= cy+ry; y+=15)
+for (let x = cx-rx; x <= cx+rx; x+=15) {
+const nx=(x-cx)/rx, ny=(y-cy)/ry;
+if (nx*nx+ny*ny<1) d.push({x,y,a:0,isLandmark:false});
+}
+// Landmarks
+[[cx-rx*.28,cy-ry*.18],[cx+rx*.28,cy-ry*.18],[cx,cy+ry*.06],[cx-rx*.17,cy+ry*.32],[cx+rx*.17,cy+ry*.32],[cx,cy+ry*.42]].forEach(([x,y])=>d.push({x,y,a:0,isLandmark:true}));
+dots.current = d;
+
+```
+const draw = () => {
+  frame.current++;
+  ctx.clearRect(0,0,W,H);
+  if (!active) {
+    d.forEach(dot => {
+      dot.a = Math.max(0, Math.min(0.2, dot.a + (Math.random()>.6?.008:-.004)));
+      ctx.beginPath(); ctx.arc(dot.x,dot.y,1.3,0,Math.PI*2);
+      ctx.fillStyle=`rgba(0,230,170,${dot.a})`; ctx.fill();
+    });
+  } else {
+    const topY = cy-ry, botY = cy+ry;
+    const scanY = topY + (progress/100)*(botY-topY);
+    // glow above scanline
+    const g = ctx.createLinearGradient(0,scanY-30,0,scanY+4);
+    g.addColorStop(0,"rgba(0,255,180,0)"); g.addColorStop(.7,"rgba(0,255,180,.08)"); g.addColorStop(1,"rgba(0,255,180,.6)");
+    ctx.fillStyle=g; ctx.fillRect(0,scanY-30,W,34);
+    // scanline
+    ctx.beginPath(); ctx.moveTo(0,scanY); ctx.lineTo(W,scanY);
+    ctx.strokeStyle="rgba(0,255,180,.95)"; ctx.lineWidth=1.8; ctx.stroke();
+    // dots
+    d.forEach(dot => {
+      const scanned = dot.y <= scanY;
+      dot.a += ((scanned?1:0)-dot.a)*.12;
+      const near = Math.abs(dot.y-scanY)<22;
+      const glow = near ? .5+.5*Math.sin(frame.current*.5) : 0;
+      const a = Math.min(1, dot.a+glow);
+      const r = dot.isLandmark ? 3.5 : (scanned?2:1.3);
+      ctx.beginPath(); ctx.arc(dot.x,dot.y,r,0,Math.PI*2);
+      ctx.fillStyle=dot.isLandmark?`rgba(80,255,160,${a})`:`rgba(0,210,180,${a})`; ctx.fill();
+      if(dot.isLandmark&&a>.4){ctx.beginPath();ctx.arc(dot.x,dot.y,7,0,Math.PI*2);ctx.fillStyle=`rgba(0,255,150,${a*.22})`;ctx.fill();}
+    });
+    // mesh between landmarks
+    const lit = d.filter(x=>x.isLandmark&&x.a>.35);
+    if(lit.length>1){ctx.strokeStyle="rgba(0,255,180,.1)";ctx.lineWidth=.7;for(let i=0;i<lit.length-1;i++){ctx.beginPath();ctx.moveTo(lit[i].x,lit[i].y);ctx.lineTo(lit[i+1].x,lit[i+1].y);ctx.stroke();}}
+    // brackets
+    const bs=32,bt=2.5;
+    ctx.strokeStyle="rgba(0,255,180,.8)"; ctx.lineWidth=bt;
+    [[0,0,1,1],[W,0,-1,1],[0,H,1,-1],[W,H,-1,-1]].forEach(([x,y,dx,dy])=>{ctx.beginPath();ctx.moveTo(x+dx*bs,y);ctx.lineTo(x,y);ctx.lineTo(x,y+dy*bs);ctx.stroke();});
+    // pct
+    ctx.font="bold 10px monospace"; ctx.fillStyle="rgba(0,255,180,.85)";
+    ctx.fillText(`SCANNING ${Math.round(progress)}%`,12,18);
+  }
+  raf.current = requestAnimationFrame(draw);
+};
+draw();
+return () => cancelAnimationFrame(raf.current);
+```
+
+}, [active, progress]);
+
+return <canvas ref={ref} width={360} height={480} style={{position:“absolute”,inset:0,width:“100%”,height:“100%”,pointerEvents:“none”}} />;
+}
+
+// ── Score Ring ────────────────────────────────────────────────────────────────
+function ScoreRing({ score, size = 110 }) {
+const r = size/2-8, circ = 2*Math.PI*r;
+const pct = score/100;
+const col = score>=75?”#00ffb3”:score>=50?”#ffcc00”:”#ff4d00”;
+return (
+<svg width={size} height={size} style={{display:“block”}}>
+<circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#111" strokeWidth={7}/>
+<circle cx={size/2} cy={size/2} r={r} fill=“none” stroke={col} strokeWidth={7}
+strokeDasharray={`${pct*circ} ${circ}`} strokeLinecap=“round”
+transform={`rotate(-90 ${size/2} ${size/2})`}
+style={{transition:“stroke-dasharray 1.2s cubic-bezier(.4,0,.2,1)”}}/>
+<text x={size/2} y={size/2+2} textAnchor=“middle” dominantBaseline=“middle”
+style={{fontFamily:”‘Orbitron’,sans-serif”,fontWeight:900,fontSize:size*.22,fill:col}}>{score}</text>
+</svg>
+);
+}
+
+function Bar({ label, score, delay=0 }) {
+const col = score>=75?”#00ffb3”:score>=50?”#ffcc00”:”#ff4d00”;
+return (
+<div style={{marginBottom:10}}>
+<div style={{display:“flex”,justifyContent:“space-between”,fontSize:11,color:”#555”,marginBottom:3,fontFamily:“monospace”}}>
+<span style={{color:”#888”}}>{label}</span><span style={{color:col}}>{score}</span>
+</div>
+<div style={{background:”#111”,borderRadius:4,height:5,overflow:“hidden”}}>
+<div style={{width:`${score}%`,height:“100%”,background:`linear-gradient(90deg,#ff4d00,${col})`,borderRadius:4,transition:`width 1s ease ${delay}s`}}/>
+</div>
+</div>
+);
+}
+
+// ── CSS ───────────────────────────────────────────────────────────────────────
+const CSS = `@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=DM+Mono:wght@400;500&display=swap'); *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent} body{overscroll-behavior:none} @keyframes pop{0%{transform:scale(.5);opacity:0}70%{transform:scale(1.1)}100%{transform:scale(1);opacity:1}} @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}} @keyframes spin{to{transform:rotate(360deg)}} @keyframes slideUp{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}} @keyframes glow{0%,100%{text-shadow:0 0 20px currentColor}50%{text-shadow:0 0 50px currentColor,0 0 80px currentColor}}`;
+
+// ── App ───────────────────────────────────────────────────────────────────────
+export default function FaceBattle() {
+// screens: home | p1scan | p1done | handoff | p2scan | p2done | winner
+const [screen, setScreen] = useState(“home”);
+const [p1Name, setP1Name] = useState(””);
+const [p2Name, setP2Name] = useState(””);
+const [phase, setPhase] = useState(“idle”); // idle|scanning|rating
+const [scanProgress, setScanProgress] = useState(0);
+const [timer, setTimer] = useState(20);
+const [p1Result, setP1Result] = useState(null);
+const [p2Result, setP2Result] = useState(null);
+const [p1Img, setP1Img] = useState(null);
+const [p2Img, setP2Img] = useState(null);
+const [error, setError] = useState(””);
+const [cameraOn, setCameraOn] = useState(false);
+
+const videoRef = useRef(null);
+const streamRef = useRef(null);
+const timerRef = useRef(null);
+const scanRef = useRef(null);
+const stopMusicRef = useRef(null);
+const currentPlayer = screen.startsWith(“p1”) ? 1 : 2;
+
+const startCamera = useCallback(async () => {
+try {
+// Try back camera for fun, fall back to front
+let stream;
+try { stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:“user”,width:{ideal:360},height:{ideal:480}},audio:false}); }
+catch { stream = await navigator.mediaDevices.getUserMedia({video:true,audio:false}); }
+streamRef.current = stream;
+if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.onloadedmetadata = () => setCameraOn(true); }
+} catch { setError(“Tap Allow when browser asks for camera access, then try again.”); }
+}, []);
+
+const stopCamera = useCallback(() => {
+streamRef.current?.getTracks().forEach(t=>t.stop());
+setCameraOn(false);
+}, []);
+
+const stopMusic = () => { if(stopMusicRef.current){stopMusicRef.current();stopMusicRef.current=null;} Tone.Transport.stop(); Tone.Transport.cancel(); };
+
+const startScan = async () => {
+if (phase !== “idle” || !cameraOn) return;
+setError(””); setPhase(“scanning”); setScanProgress(0); setTimer(20);
+// music
+stopMusicRef.current = await playBattleMusic();
+// countdown
+let t = 20;
+timerRef.current = setInterval(() => { t–; setTimer(t); if(t<=0){clearInterval(timerRef.current);doCapture();} }, 1000);
+// scan bar
+let p = 0;
+scanRef.current = setInterval(() => { p = Math.min(99, p+(100-p)*.024+.2); setScanProgress(p); }, 150);
+};
+
+const doCapture = async () => {
+clearInterval(scanRef.current); setScanProgress(100);
+stopMusic();
+setPhase(“rating”);
+const b64 = captureFace(videoRef.current);
+if (currentPlayer === 1) setP1Img(`data:image/jpeg;base64,${b64}`);
+else setP2Img(`data:image/jpeg;base64,${b64}`);
+try {
+const result = await rateFace(b64);
+if (!result.faceDetected) { setPhase(“idle”); setScanProgress(0); setError(“No face detected! Hold still and look at camera.”); return; }
+if (currentPlayer === 1) { setP1Result(result); setScreen(“p1done”); }
+else { setP2Result(result); setScreen(“p2done”); }
+setPhase(“idle”);
+} catch { setPhase(“idle”); setScanProgress(0); setError(“Rating failed — tap Scan to try again.”); }
+};
+
+const goToScan = async (player) => {
+setPhase(“idle”); setScanProgress(0); setTimer(20); setError(””);
+setScreen(player === 1 ? “p1scan” : “p2scan”);
+await startCamera();
+};
+
+const goToHandoff = () => { stopCamera(); setScreen(“handoff”); };
+const goToWinner = async () => {
+stopCamera();
+const won = (p1Result?.overall||0) >= (p2Result?.overall||0);
+stopMusicRef.current = await playResultStinger(true);
+setScreen(“winner”);
+};
+
+const reset = () => {
+stopCamera(); stopMusic();
+setScreen(“home”); setPhase(“idle”); setScanProgress(0); setTimer(20);
+setP1Result(null); setP2Result(null); setP1Img(null); setP2Img(null);
+setP1Name(””); setP2Name(””); setError(””);
+};
+
+useEffect(() => () => { stopCamera(); stopMusic(); clearInterval(timerRef.current); clearInterval(scanRef.current); }, []);
+
+// ── Shared styles ──
+const base = { minHeight:“100vh”, background:”#060606”, color:”#eee”, fontFamily:”‘DM Mono’,monospace”, display:“flex”, flexDirection:“column”, alignItems:“center”, justifyContent:“center”, padding:“24px 20px”, position:“relative”, overflow:“hidden” };
+const O = (col=”#00ffb3”,fs=18) => ({ fontFamily:”‘Orbitron’,sans-serif”, color:col, fontSize:fs, fontWeight:900, textShadow:`0 0 24px ${col}50` });
+const bigBtn = (col=”#00ffb3”) => ({ display:“block”, width:“100%”, padding:“18px”, borderRadius:14, border:`2px solid ${col}`, background:`${col}10`, color:col, fontFamily:”‘Orbitron’,sans-serif”, fontSize:16, fontWeight:900, letterSpacing:3, cursor:“pointer”, marginTop:14, WebkitAppearance:“none” });
+const inp = { width:“100%”, padding:“14px 16px”, background:”#0c0c0c”, border:“1px solid #1c1c1c”, borderRadius:10, color:”#eee”, fontFamily:”‘DM Mono’,monospace”, fontSize:15, outline:“none”, marginBottom:10 };
+const grid = { position:“fixed”, inset:0, backgroundImage:“linear-gradient(rgba(0,255,150,.02) 1px,transparent 1px),linear-gradient(90deg,rgba(0,255,150,.02) 1px,transparent 1px)”, backgroundSize:“40px 40px”, pointerEvents:“none” };
+
+// ══ HOME ══
+if (screen === “home”) return (
+<div style={base}>
+<style>{CSS}</style>
+<div style={grid}/>
+<div style={{width:“100%”,maxWidth:360}}>
+<div style={{textAlign:“center”,marginBottom:32}}>
+<div style={{…O(”#00ffb3”,9),letterSpacing:6,marginBottom:8,opacity:.6}}>◈ PASS THE PHONE ◈</div>
+<div style={{…O(”#fff”,52),lineHeight:.9}}>FACE</div>
+<div style={{…O(”#ff4d00”,52),lineHeight:.9}}>SCAN</div>
+<div style={{…O(”#fff”,52),lineHeight:.9,marginBottom:8}}>BATTLE</div>
+<div style={{color:”#222”,fontSize:10,letterSpacing:3}}>2 PLAYERS · 1 PHONE · AI JUDGE</div>
+</div>
+<input style={inp} placeholder=“Player 1 name…” value={p1Name} onChange={e=>{setP1Name(e.target.value);setError(””);}} />
+<input style={inp} placeholder=“Player 2 name…” value={p2Name} onChange={e=>{setP2Name(e.target.value);setError(””);}} />
+<button style={bigBtn(”#00ffb3”)} onClick={()=>{
+if(!p1Name.trim()||!p2Name.trim()) return setError(“Both players need a name!”);
+goToScan(1);
+}}>⚡ START BATTLE</button>
+{error && <div style={{color:”#ff4d00”,fontSize:12,textAlign:“center”,marginTop:12,lineHeight:1.6}}>{error}</div>}
+</div>
+</div>
+);
+
+// ══ SCAN SCREEN (shared for P1 and P2) ══
+if (screen === “p1scan” || screen === “p2scan”) {
+const pName = currentPlayer===1 ? p1Name : p2Name;
+return (
+<div style={{…base,justifyContent:“flex-start”,padding:“16px 16px 24px”}}>
+<style>{CSS}</style>
+<div style={grid}/>
+{/* HUD */}
+<div style={{width:“100%”,maxWidth:400,display:“flex”,justifyContent:“space-between”,alignItems:“center”,marginBottom:12}}>
+<div style={O(”#00ffb3”,11)}>{pName.toUpperCase()}</div>
+<div style={{…O(timer<=5?”#ff4d00”:”#ffcc00”,32), animation:timer<=5&&phase===“scanning”?“pulse .5s infinite”:“none”}}>
+{phase===“scanning”?`${timer}s`:””}
+</div>
+<div style={{…O(”#333”,11)}}>PLAYER {currentPlayer}</div>
+</div>
+{/* Camera box */}
+<div style={{width:“100%”,maxWidth:400,position:“relative”,borderRadius:16,overflow:“hidden”,background:”#000”,aspectRatio:“3/4”,border:`1.5px solid ${phase==="scanning"?"#00ffb330":"#111"}`,flex:“0 0 auto”}}>
+<video ref={videoRef} autoPlay muted playsInline style={{width:“100%”,height:“100%”,objectFit:“cover”,display:“block”}}/>
+<ScanOverlay active={phase===“scanning”} progress={scanProgress}/>
+{phase===“rating” && (
+<div style={{position:“absolute”,inset:0,background:“rgba(0,0,0,.8)”,display:“flex”,flexDirection:“column”,alignItems:“center”,justifyContent:“center”,gap:14}}>
+<div style={{width:44,height:44,border:“3px solid #00ffb3”,borderTopColor:“transparent”,borderRadius:“50%”,animation:“spin .7s linear infinite”}}/>
+<div style={{…O(”#00ffb3”,10),letterSpacing:3}}>AI RATING…</div>
+</div>
+)}
+</div>
+{/* CTA */}
+<div style={{width:“100%”,maxWidth:400,marginTop:14}}>
+{error && <div style={{color:”#ff4d00”,fontSize:12,textAlign:“center”,marginBottom:10,lineHeight:1.6}}>{error}</div>}
+{phase===“idle” && !cameraOn && <div style={{color:”#333”,fontSize:12,textAlign:“center”}}>Loading camera…</div>}
+{phase===“idle” && cameraOn && (
+<button style={bigBtn(”#00ffb3”)} onClick={startScan}>◈ SCAN MY FACE ◈</button>
+)}
+{phase===“scanning” && (
+<div style={{color:”#333”,fontSize:11,textAlign:“center”,letterSpacing:2}}>HOLD STILL — SCANNING…</div>
+)}
+</div>
+</div>
+);
+}
+
+// ══ P1 DONE ══
+if (screen === “p1done” && p1Result) return (
+<div style={base}>
+<style>{CSS}</style>
+<div style={grid}/>
+<div style={{width:“100%”,maxWidth:360,textAlign:“center”}}>
+<div style={{…O(”#00ffb3”,11),letterSpacing:4,marginBottom:4}}>SCAN COMPLETE</div>
+<div style={{…O(”#fff”,28),marginBottom:2}}>{p1Name.toUpperCase()}</div>
+{p1Img && <img src={p1Img} alt=”” style={{width:120,height:120,borderRadius:“50%”,objectFit:“cover”,border:“3px solid #00ffb330”,marginBottom:16,filter:“saturate(.8)”}}/>}
+<div style={{marginBottom:8}}><ScoreRing score={p1Result.overall} size={130}/></div>
+<div style={{color:”#555”,fontSize:12,fontStyle:“italic”,marginBottom:20}}>”{p1Result.verdict}”</div>
+<div style={{background:”#0a0a0a”,borderRadius:12,padding:“16px”,marginBottom:20,textAlign:“left”}}>
+<Bar label="CHARISMA" score={p1Result.charisma} delay={0}/>
+<Bar label="VIBE" score={p1Result.vibe} delay={.08}/>
+<Bar label="EXPRESSION" score={p1Result.expression} delay={.16}/>
+<Bar label="PHOTOGENIC" score={p1Result.photogenic} delay={.24}/>
+</div>
+<button style={bigBtn(”#ff4d00”)} onClick={goToHandoff}>PASS TO {p2Name.toUpperCase()} →</button>
+</div>
+</div>
+);
+
+// ══ HANDOFF ══
+if (screen === “handoff”) return (
+<div style={base}>
+<style>{CSS}</style>
+<div style={grid}/>
+<div style={{textAlign:“center”,width:“100%”,maxWidth:360}}>
+<div style={{fontSize:64,marginBottom:16}}>📱</div>
+<div style={{…O(”#ffcc00”,26),marginBottom:8}}>HAND THE PHONE</div>
+<div style={{…O(”#fff”,36),marginBottom:4}}>TO {p2Name.toUpperCase()}</div>
+<div style={{color:”#444”,fontSize:12,letterSpacing:2,marginBottom:32}}>{p1Name} scored {p1Result?.overall}/100 — beat it!</div>
+<button style={bigBtn(”#ff4d00”)} onClick={()=>goToScan(2)}>⚡ I’M READY — SCAN ME</button>
+</div>
+</div>
+);
+
+// ══ P2 DONE ══
+if (screen === “p2done” && p2Result) return (
+<div style={base}>
+<style>{CSS}</style>
+<div style={grid}/>
+<div style={{width:“100%”,maxWidth:360,textAlign:“center”}}>
+<div style={{…O(”#ff4d00”,11),letterSpacing:4,marginBottom:4}}>SCAN COMPLETE</div>
+<div style={{…O(”#fff”,28),marginBottom:2}}>{p2Name.toUpperCase()}</div>
+{p2Img && <img src={p2Img} alt=”” style={{width:120,height:120,borderRadius:“50%”,objectFit:“cover”,border:“3px solid #ff4d0030”,marginBottom:16,filter:“saturate(.8)”}}/>}
+<div style={{marginBottom:8}}><ScoreRing score={p2Result.overall} size={130}/></div>
+<div style={{color:”#555”,fontSize:12,fontStyle:“italic”,marginBottom:20}}>”{p2Result.verdict}”</div>
+<div style={{background:”#0a0a0a”,borderRadius:12,padding:“16px”,marginBottom:20,textAlign:“left”}}>
+<Bar label="CHARISMA" score={p2Result.charisma} delay={0}/>
+<Bar label="VIBE" score={p2Result.vibe} delay={.08}/>
+<Bar label="EXPRESSION" score={p2Result.expression} delay={.16}/>
+<Bar label="PHOTOGENIC" score={p2Result.photogenic} delay={.24}/>
+</div>
+<button style={bigBtn(”#ff4d00”)} onClick={goToWinner}>🏆 SEE WHO WINS</button>
+</div>
+</div>
+);
+
+// ══ WINNER ══
+if (screen === “winner” && p1Result && p2Result) {
+const p1s = p1Result.overall, p2s = p2Result.overall;
+const tied = p1s === p2s;
+const winnerName = tied ? null : (p1s > p2s ? p1Name : p2Name);
+const loserName = tied ? null : (p1s > p2s ? p2Name : p1Name);
+const winScore = tied ? p1s : Math.max(p1s,p2s);
+const loseScore = tied ? p2s : Math.min(p1s,p2s);
+const diff = Math.abs(p1s-p2s);
+
+```
+return (
+  <div style={{...base,overflowY:"auto",justifyContent:"flex-start",paddingTop:32}}>
+    <style>{CSS}</style>
+    <div style={grid}/>
+    <div style={{width:"100%",maxWidth:360,textAlign:"center"}}>
+      {/* Trophy */}
+      <div style={{fontSize:56,marginBottom:4,animation:"pop .6s ease"}}>{tied?"🤝":"🏆"}</div>
+      <div style={{...O(tied?"#ffcc00":"#00ffb3",11),letterSpacing:4,marginBottom:4}}>{tied?"IT'S A TIE":"WINNER"}</div>
+      <div style={{...O(tied?"#ffcc00":"#fff",38),marginBottom:2,animation:"pop .5s ease"}}>{tied?"NOBODY":""}  {winnerName||""}</div>
+      {!tied && <div style={{color:"#333",fontSize:11,letterSpacing:2,marginBottom:20}}>beat {loserName} by {diff} points</div>}
+      {tied && <div style={{color:"#555",fontSize:11,letterSpacing:2,marginBottom:20}}>both scored {p1s} — unbelievable</div>}
+
+      {/* Side by side */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
+        {[{name:p1Name,result:p1Result,img:p1Img,won:p1s>=p2s},{name:p2Name,result:p2Result,img:p2Img,won:p2s>=p1s}].map(({name,result,img,won})=>(
+          <div key={name} style={{background:"#0a0a0a",border:`1px solid ${won&&!tied?"#00ffb330":"#111"}`,borderRadius:12,padding:12,animation:"slideUp .5s ease"}}>
+            {img && <img src={img} alt="" style={{width:64,height:64,borderRadius:"50%",objectFit:"cover",marginBottom:8,border:`2px solid ${won&&!tied?"#00ffb340":"#1a1a1a"}`,filter:"saturate(.75)"}}/>}
+            <div style={{...O(won&&!tied?"#00ffb3":"#555",10),marginBottom:4}}>{name.toUpperCase()}</div>
+            <div style={{...O(won&&!tied?"#fff":"#444",38),lineHeight:1}}>{result.overall}</div>
+            <div style={{color:"#333",fontSize:9,letterSpacing:1,marginTop:4,lineHeight:1.5,fontStyle:"italic"}}>"{result.verdict}"</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Bars comparison */}
+      <div style={{background:"#0a0a0a",borderRadius:12,padding:16,marginBottom:20,textAlign:"left"}}>
+        <div style={{...O("#333",9),letterSpacing:3,marginBottom:12,textAlign:"center"}}>BREAKDOWN</div>
+        {["charisma","vibe","expression","photogenic"].map((k,i)=>{
+          const s1=p1Result[k]||0, s2=p2Result[k]||0;
+          return (
+            <div key={k} style={{marginBottom:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:"#444",marginBottom:4,fontFamily:"monospace"}}>
+                <span style={{color:s1>=s2?"#00ffb3":"#555"}}>{p1Name.slice(0,8)} {s1}</span>
+                <span style={{color:"#222",letterSpacing:2}}>{k.toUpperCase()}</span>
+                <span style={{color:s2>=s1?"#00ffb3":"#555"}}>{s2} {p2Name.slice(0,8)}</span>
+              </div>
+              <div style={{display:"flex",gap:4,height:5}}>
+                <div style={{flex:1,background:"#111",borderRadius:"4px 0 0 4px",overflow:"hidden",display:"flex",justifyContent:"flex-end"}}>
+                  <div style={{width:`${s1}%`,background:s1>=s2?"#00ffb3":"#333",height:"100%",borderRadius:"4px 0 0 4px",transition:`width 1s ease ${i*.1}s`}}/>
+                </div>
+                <div style={{flex:1,background:"#111",borderRadius:"0 4px 4px 0",overflow:"hidden"}}>
+                  <div style={{width:`${s2}%`,background:s2>=s1?"#ff4d00":"#333",height:"100%",borderRadius:"0 4px 4px 0",transition:`width 1s ease ${i*.1}s`}}/>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <button style={bigBtn("#00ffb3")} onClick={reset}>◈ PLAY AGAIN ◈</button>
+    </div>
+  </div>
+);
+```
+
+}
+
+return null;
+}
