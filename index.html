@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<title>Face Scan Battle</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{background:#060606;color:#eee;font-family:'DM Mono',monospace;overflow-x:hidden}
+.page{min-height:100vh;display:none;flex-direction:column;align-items:center;justify-content:center;padding:28px 20px;background:#060606}
+.page.on{display:flex}
+.orb{font-family:'Orbitron',sans-serif;font-weight:900}
+.grid{position:fixed;inset:0;background-image:linear-gradient(rgba(0,255,150,.02) 1px,transparent 1px),linear-gradient(90deg,rgba(0,255,150,.02) 1px,transparent 1px);background-size:40px 40px;pointer-events:none}
+input{width:100%;padding:14px 16px;background:#0d0d0d;border:1px solid #1e1e1e;border-radius:10px;color:#eee;font-family:'DM Mono',monospace;font-size:15px;outline:none;margin-bottom:10px}
+input::placeholder{color:#2a2a2a}
+.btn{width:100%;padding:17px;border-radius:13px;font-family:'Orbitron',sans-serif;font-size:15px;font-weight:900;letter-spacing:2px;cursor:pointer;margin-top:12px;border:2px solid;background:transparent;display:block;text-align:center;-webkit-appearance:none}
+.btn:active{opacity:.7}
+.g{border-color:#00ffb3;color:#00ffb3}
+.r{border-color:#ff4d00;color:#ff4d00}
+.err{color:#ff4d00;font-size:12px;text-align:center;margin-top:10px;line-height:1.7;padding:0 4px}
+#cam-box{width:100%;max-width:400px;position:relative;border-radius:16px;overflow:hidden;background:#111;aspect-ratio:3/4;margin-bottom:14px}
+#vid{
+  position:absolute;top:0;left:0;
+  width:100%;height:100%;
+  object-fit:cover;
+}
+#dot-cv{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:2}
+#rate-ov{position:absolute;inset:0;background:rgba(0,0,0,.82);display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:3}
+.spin{width:46px;height:46px;border:3px solid #00ffb3;border-top-color:transparent;border-radius:50%;animation:sp .75s linear infinite}
+.bar{margin-bottom:11px;width:100%}
+.bl{display:flex;justify-content:space-between;font-size:11px;font-family:monospace;margin-bottom:4px}
+.bt{background:#111;border-radius:4px;height:6px;overflow:hidden}
+.bf{height:100%;border-radius:4px;width:0;transition:width 1.1s ease}
+.card{background:#0d0d0d;border:1px solid #111;border-radius:12px;padding:16px;margin-bottom:16px;width:100%}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px;width:100%;margin-bottom:16px}
+.rc{background:#0d0d0d;border:1px solid #111;border-radius:12px;padding:12px;text-align:center}
+.rc img{width:62px;height:62px;border-radius:50%;object-fit:cover;margin:0 auto 8px;filter:saturate(.75);display:block}
+.hrow{margin-bottom:12px}
+.hl{display:flex;justify-content:space-between;font-size:10px;font-family:monospace;margin-bottom:4px}
+.hb{display:flex;gap:3px;height:5px}
+.hl2{flex:1;background:#111;border-radius:3px 0 0 3px;overflow:hidden;display:flex;justify-content:flex-end}
+.hr2{flex:1;background:#111;border-radius:0 3px 3px 0;overflow:hidden}
+.hbf{height:100%;width:0;transition:width 1s ease}
+@keyframes sp{to{transform:rotate(360deg)}}
+@keyframes pop{0%{transform:scale(.4);opacity:0}70%{transform:scale(1.1)}100%{transform:scale(1);opacity:1}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+</style>
+</head>
+<body>
+<div class="grid"></div>
+
+<!-- HOME -->
+<div class="page on" id="p-home">
+  <div style="width:100%;max-width:380px;display:flex;flex-direction:column;align-items:center;position:relative;z-index:1">
+    <div style="text-align:center;margin-bottom:28px">
+      <div class="orb" style="font-size:9px;letter-spacing:6px;color:#00ffb3;opacity:.5;margin-bottom:10px">◈ PASS THE PHONE ◈</div>
+      <div class="orb" style="font-size:54px;line-height:.9;color:#fff">FACE</div>
+      <div class="orb" style="font-size:54px;line-height:.9;color:#ff4d00">SCAN</div>
+      <div class="orb" style="font-size:54px;line-height:.9;color:#fff;margin-bottom:10px">BATTLE</div>
+      <div style="color:#1a1a1a;font-size:10px;letter-spacing:3px">2 PLAYERS · 1 PHONE · AI JUDGE</div>
+    </div>
+    <input id="n1" placeholder="Player 1 name..."/>
+    <input id="n2" placeholder="Player 2 name..."/>
+    <button class="btn g" onclick="startGame()">⚡ START BATTLE</button>
+    <div class="err" id="home-err"></div>
+  </div>
+</div>
+
+<!-- SCAN -->
+<div class="page" id="p-scan" style="justify-content:flex-start;padding-top:18px">
+  <div style="width:100%;max-width:400px;display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;z-index:1;position:relative">
+    <div class="orb" id="hud-n" style="font-size:11px;color:#00ffb3"></div>
+    <div class="orb" id="hud-t" style="font-size:30px;color:#ffcc00;min-width:56px;text-align:center"></div>
+    <div class="orb" id="hud-p" style="font-size:11px;color:#222"></div>
+  </div>
+  <div id="cam-box">
+    <video id="vid" autoplay muted playsinline webkit-playsinline></video>
+    <canvas id="dot-cv" width="360" height="480"></canvas>
+    <div id="rate-ov">
+      <div class="spin"></div>
+      <div class="orb" style="font-size:10px;color:#00ffb3;letter-spacing:3px">AI RATING...</div>
+    </div>
+  </div>
+  <div style="width:100%;max-width:400px;z-index:1;position:relative">
+    <div class="err" id="scan-err"></div>
+    <div id="scan-status" style="color:#2a2a2a;font-size:11px;text-align:center;letter-spacing:2px;margin-top:6px;min-height:18px">Starting camera...</div>
+    <button class="btn g" id="scan-btn" style="display:none" onclick="beginScan()">◈ SCAN MY FACE ◈</button>
+  </div>
+</div>
+
+<!-- DONE -->
+<div class="page" id="p-done" style="justify-content:flex-start;padding-top:24px;overflow-y:auto">
+  <div style="width:100%;max-width:380px;display:flex;flex-direction:column;align-items:center;position:relative;z-index:1">
+    <div class="orb" id="d-lbl" style="font-size:10px;letter-spacing:4px;margin-bottom:4px"></div>
+    <div class="orb" id="d-name" style="font-size:26px;color:#fff;margin-bottom:12px"></div>
+    <img id="d-img" style="width:110px;height:110px;border-radius:50%;object-fit:cover;margin-bottom:14px;filter:saturate(.8);display:none;border:3px solid #00ffb344"/>
+    <div id="d-ring" style="margin-bottom:8px"></div>
+    <div style="color:#333;font-size:10px;letter-spacing:3px;margin-bottom:4px">VERDICT</div>
+    <div id="d-verdict" style="color:#555;font-size:13px;font-style:italic;text-align:center;margin-bottom:20px;line-height:1.6;padding:0 8px"></div>
+    <div class="card" id="d-bars"></div>
+    <button class="btn r" id="d-btn"></button>
+  </div>
+</div>
+
+<!-- HANDOFF -->
+<div class="page" id="p-handoff">
+  <div style="width:100%;max-width:380px;text-align:center;position:relative;z-index:1">
+    <div style="font-size:64px;margin-bottom:16px">📱</div>
+    <div class="orb" style="font-size:20px;color:#ffcc00;margin-bottom:8px">HAND THE PHONE TO</div>
+    <div class="orb" id="ho-name" style="font-size:34px;color:#fff;margin-bottom:6px"></div>
+    <div id="ho-score" style="color:#333;font-size:12px;margin-bottom:32px"></div>
+    <button class="btn r" onclick="goScan(2)">⚡ I'M READY — SCAN ME</button>
+  </div>
+</div>
+
+<!-- WINNER -->
+<div class="page" id="p-winner" style="justify-content:flex-start;padding-top:24px;overflow-y:auto">
+  <div style="width:100%;max-width:380px;display:flex;flex-direction:column;align-items:center;position:relative;z-index:1">
+    <div id="w-trophy" style="font-size:54px;text-align:center;margin-bottom:4px;animation:pop .6s ease"></div>
+    <div class="orb" id="w-lbl" style="font-size:10px;letter-spacing:4px;text-align:center;margin-bottom:4px"></div>
+    <div class="orb" id="w-name" style="font-size:36px;color:#fff;text-align:center;margin-bottom:4px;animation:pop .5s ease"></div>
+    <div id="w-sub" style="color:#2a2a2a;font-size:11px;letter-spacing:2px;text-align:center;margin-bottom:20px"></div>
+    <div class="two" id="w-cards"></div>
+    <div class="card" id="w-h2h"></div>
+    <button class="btn g" onclick="resetGame()">◈ PLAY AGAIN ◈</button>
+  </div>
+</div>
+
+<script>
+var S={cp:1,phase:'idle',prog:0,timer:20,p1r:null,p2r:null,p1img:null,p2img:null,p1n:'',p2n:''};
+var camStream=null,tInt=null,sInt=null,dotRAF=null,dotData=[],dotFrame=0,mInt=null,aCtx=null;
+
+function show(id){
+  ['home','scan','done','handoff','winner'].forEach(function(p){
+    document.getElementById('p-'+p).classList.toggle('on',p===id);
+  });
+}
+
+function startGame(){
+  var p1=document.getElementById('n1').value.trim();
+  var p2=document.getElementById('n2').value.trim();
+  if(!p1||!p2){document.getElementById('home-err').textContent='Both players need a name!';return;}
+  S.p1n=p1;S.p2n=p2;
+  goScan(1);
+}
+
+function goScan(player){
+  S.cp=player;S.phase='idle';S.prog=0;S.timer=20;
+  var name=player===1?S.p1n:S.p2n;
+  document.getElementById('hud-n').textContent=name.toUpperCase();
+  document.getElementById('hud-t').textContent='';
+  document.getElementById('hud-p').textContent='PLAYER '+player;
+  document.getElementById('scan-btn').style.display='none';
+  document.getElementById('scan-status').textContent='Starting camera...';
+  document.getElementById('scan-err').textContent='';
+  document.getElementById('rate-ov').style.display='none';
+  show('scan');
+  // small delay so page renders before we ask for camera
+  setTimeout(startCam, 200);
+}
+
+function startCam(){
+  stopCam();
+  var vid=document.getElementById('vid');
+
+  // Reset video element completely for iOS
+  vid.srcObject=null;
+  vid.load();
+
+  navigator.mediaDevices.getUserMedia({
+    video:{facingMode:'user'},
+    audio:false
+  }).then(function(stream){
+    camStream=stream;
+    vid.srcObject=stream;
+
+    // iOS Safari requires these event listeners in this order
+    vid.onloadedmetadata=function(){
+      vid.play().then(function(){
+        onCamReady();
+      }).catch(function(){
+        // iOS sometimes needs a moment
+        setTimeout(function(){
+          vid.play().then(onCamReady).catch(function(e){
+            document.getElementById('scan-err').textContent='Tap the screen once then try again. ('+e.message+')';
+          });
+        },500);
+      });
+    };
+
+    // Fallback for browsers that don't fire loadedmetadata
+    vid.oncanplay=function(){
+      if(vid.paused){
+        vid.play().then(onCamReady).catch(function(){});
+      }
+    };
+
+  }).catch(function(e){
+    var msg='Camera error. ';
+    if(e.name==='NotAllowedError') msg='Camera blocked! Go to iPhone Settings → Safari → Camera → set to Allow. Then reload.';
+    else if(e.name==='NotFoundError') msg='No camera found.';
+    else msg='Camera error: '+e.message;
+    document.getElementById('scan-err').textContent=msg;
+    document.getElementById('scan-status').textContent='';
+  });
+}
+
+function onCamReady(){
+  document.getElementById('scan-status').textContent='';
+  document.getElementById('scan-btn').style.display='block';
+  startDots();
+}
+
+function stopCam(){
+  if(camStream){camStream.getTracks().forEach(function(t){t.stop();});camStream=null;}
+  if(dotRAF){cancelAnimationFrame(dotRAF);dotRAF=null;}
+}
+
+function beginScan(){
+  if(S.phase!=='idle')return;
+  S.phase='scanning';S.prog=0;S.timer=20;
+  document.getElementById('scan-btn').style.display='none';
+  document.getElementById('scan-status').textContent='HOLD STILL...';
+  document.getElementById('scan-err').textContent='';
+  playMusic();
+  var t=20;
+  document.getElementById('hud-t').textContent=t+'s';
+  tInt=setInterval(function(){
+    t--;S.timer=t;
+    var el=document.getElementById('hud-t');
+    if(el){el.textContent=t+'s';el.style.color=t<=5?'#ff4d00':'#ffcc00';}
+    if(t<=0){clearInterval(tInt);doCapture();}
+  },1000);
+  var p=0;
+  sInt=setInterval(function(){p=Math.min(99,p+(100-p)*.025+.18);S.prog=p;},140);
+}
+
+function doCapture(){
+  clearInterval(sInt);S.prog=100;
+  stopMusic();S.phase='rating';
+  document.getElementById('rate-ov').style.display='flex';
+  document.getElementById('scan-status').textContent='';
+
+  var vid=document.getElementById('vid');
+  var c=document.createElement('canvas');c.width=360;c.height=480;
+  var ctx=c.getContext('2d');
+  ctx.drawImage(vid,0,0,360,480);
+  var dataUrl=c.toDataURL('image/jpeg',.82);
+  var b64=dataUrl.split(',')[1];
+  if(S.cp===1)S.p1img=dataUrl;else S.p2img=dataUrl;
+  stopCam();
+
+  rateFace(b64).then(function(result){
+    document.getElementById('rate-ov').style.display='none';
+    if(!result.faceDetected){
+      S.phase='idle';S.prog=0;
+      document.getElementById('scan-err').textContent='No face detected — try again, look straight at camera.';
+      document.getElementById('scan-btn').style.display='block';
+      setTimeout(startCam,200);return;
+    }
+    if(S.cp===1)S.p1r=result;else S.p2r=result;
+    S.phase='idle';
+    showDone();
+  }).catch(function(e){
+    document.getElementById('rate-ov').style.display='none';
+    S.phase='idle';S.prog=0;
+    document.getElementById('scan-err').textContent='Rating failed. Check internet. ('+e.message+')';
+    document.getElementById('scan-btn').style.display='block';
+    setTimeout(startCam,200);
+  });
+}
+
+function rateFace(b64){
+  return fetch('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      model:'claude-sonnet-4-20250514',
+      max_tokens:600,
+      messages:[{role:'user',content:[
+        {type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}},
+        {type:'text',text:'You are a fun hype face judge for a phone game. Playful and funny, never mean. Respond ONLY raw JSON no markdown:\n{"overall":number,"charisma":number,"vibe":number,"expression":number,"photogenic":number,"verdict":"funny sentence max 12 words","faceDetected":boolean}\nAll scores 1-100.'}
+      ]}]
+    })
+  }).then(function(r){return r.json();}).then(function(d){
+    var txt=((d.content||[]).find(function(b){return b.type==='text';})||{}).text||'{}';
+    try{return JSON.parse(txt.trim());}
+    catch(e){return{overall:60,charisma:60,vibe:60,expression:60,photogenic:60,verdict:'Interesting specimen detected.',faceDetected:true};}
+  });
+}
+
+function showDone(){
+  var r=S.cp===1?S.p1r:S.p2r,name=S.cp===1?S.p1n:S.p2n,img=S.cp===1?S.p1img:S.p2img;
+  var col=sCol(r.overall);
+  document.getElementById('d-lbl').textContent='SCAN COMPLETE';
+  document.getElementById('d-lbl').style.color=S.cp===1?'#00ffb3':'#ff4d00';
+  document.getElementById('d-name').textContent=name.toUpperCase();
+  document.getElementById('d-verdict').textContent='"'+r.verdict+'"';
+  var imgEl=document.getElementById('d-img');
+  if(img){imgEl.src=img;imgEl.style.display='block';}
+  document.getElementById('d-ring').innerHTML=ring(r.overall,128);
+  document.getElementById('d-bars').innerHTML=
+    bar('CHARISMA',r.charisma,0)+bar('VIBE',r.vibe,.1)+bar('EXPRESSION',r.expression,.2)+
+    bar('PHOTOGENIC',r.photogenic,.3)+bar('OVERALL',r.overall,.4);
+  var btn=document.getElementById('d-btn');
+  if(S.cp===1){btn.textContent='PASS TO '+S.p2n.toUpperCase()+' →';btn.onclick=goHandoff;}
+  else{btn.textContent='🏆 SEE WHO WINS';btn.onclick=showWinner;}
+  show('done');
+  setTimeout(function(){
+    document.querySelectorAll('.bf').forEach(function(b){b.style.width=b.getAttribute('data-w')+'%';});
+  },120);
+}
+
+function goHandoff(){
+  document.getElementById('ho-name').textContent=S.p2n.toUpperCase();
+  document.getElementById('ho-score').textContent=S.p1n+' scored '+S.p1r.overall+'/100 — beat it!';
+  show('handoff');
+}
+
+function showWinner(){
+  playWin();
+  var p1s=S.p1r.overall,p2s=S.p2r.overall,tied=p1s===p2s,p1w=p1s>p2s;
+  var wName=tied?null:(p1w?S.p1n:S.p2n),lName=tied?null:(p1w?S.p2n:S.p1n),diff=Math.abs(p1s-p2s);
+  var wc=tied?'#ffcc00':'#00ffb3';
+  document.getElementById('w-trophy').textContent=tied?'🤝':'🏆';
+  document.getElementById('w-lbl').textContent=tied?"IT'S A TIE":"WINNER";
+  document.getElementById('w-lbl').style.color=wc;
+  document.getElementById('w-name').textContent=wName||'NOBODY';
+  document.getElementById('w-sub').textContent=tied?'Both scored '+p1s+' — unbelievable!':(wName+' beat '+lName+' by '+diff+' points!');
+
+  function rcard(name,res,img,won){
+    return '<div class="rc" style="border-color:'+(won&&!tied?'#00ffb330':'#111')+'">'
+      +(img?'<img src="'+img+'" style="border:2px solid '+(won&&!tied?'#00ffb350':'#1a1a1a')+'"/>':'')
+      +'<div class="orb" style="font-size:10px;color:'+(won&&!tied?'#00ffb3':'#444')+';margin-bottom:4px">'+name.toUpperCase()+'</div>'
+      +'<div class="orb" style="font-size:40px;color:'+(won&&!tied?'#fff':'#333')+';line-height:1">'+res.overall+'</div>'
+      +'<div style="color:#333;font-size:10px;font-style:italic;margin-top:5px;line-height:1.5">"'+res.verdict+'"</div>'
+      +'</div>';
+  }
+  document.getElementById('w-cards').innerHTML=rcard(S.p1n,S.p1r,S.p1img,p1s>=p2s)+rcard(S.p2n,S.p2r,S.p2img,p2s>=p1s);
+
+  var cats=['charisma','vibe','expression','photogenic'],h='<div class="orb" style="font-size:9px;letter-spacing:3px;color:#1a1a1a;text-align:center;margin-bottom:14px">HEAD TO HEAD</div>';
+  cats.forEach(function(k,i){
+    var s1=S.p1r[k]||0,s2=S.p2r[k]||0;
+    h+='<div class="hrow"><div class="hl">'
+      +'<span style="color:'+(s1>=s2?'#00ffb3':'#444')+'">'+S.p1n.slice(0,9)+' '+s1+'</span>'
+      +'<span style="color:#1a1a1a;letter-spacing:2px">'+k.toUpperCase()+'</span>'
+      +'<span style="color:'+(s2>=s1?'#00ffb3':'#444')+'">'+s2+' '+S.p2n.slice(0,9)+'</span>'
+      +'</div><div class="hb">'
+      +'<div class="hl2"><div class="hbf" data-w="'+s1+'" style="background:'+(s1>=s2?'#00ffb3':'#222')+';transition-delay:'+i*.1+'s"></div></div>'
+      +'<div class="hr2"><div class="hbf" data-w="'+s2+'" style="background:'+(s2>=s1?'#ff4d00':'#222')+';transition-delay:'+i*.1+'s"></div></div>'
+      +'</div></div>';
+  });
+  document.getElementById('w-h2h').innerHTML=h;
+  show('winner');
+  setTimeout(function(){
+    document.querySelectorAll('.hbf').forEach(function(b){b.style.width=b.getAttribute('data-w')+'%';});
+  },150);
+}
+
+function resetGame(){
+  stopCam();stopMusic();clearInterval(tInt);clearInterval(sInt);
+  S={cp:1,phase:'idle',prog:0,timer:20,p1r:null,p2r:null,p1img:null,p2img:null,p1n:'',p2n:''};
+  document.getElementById('n1').value='';document.getElementById('n2').value='';
+  show('home');
+}
+
+function startDots(){
+  if(dotRAF){cancelAnimationFrame(dotRAF);dotRAF=null;}
+  var cv=document.getElementById('dot-cv');if(!cv)return;
+  var ctx=cv.getContext('2d'),W=cv.width,H=cv.height,cx=W/2,cy=H*.46,rx=W*.33,ry=H*.38;
+  if(!dotData.length){
+    for(var y=cy-ry;y<=cy+ry;y+=14)
+      for(var x=cx-rx;x<=cx+rx;x+=14){
+        var nx=(x-cx)/rx,ny=(y-cy)/ry;
+        if(nx*nx+ny*ny<1)dotData.push({x:x,y:y,a:0,lm:false});
+      }
+    [[cx-rx*.28,cy-ry*.18],[cx+rx*.28,cy-ry*.18],[cx,cy+ry*.06],
+     [cx-rx*.17,cy+ry*.32],[cx+rx*.17,cy+ry*.32],[cx,cy+ry*.42]]
+    .forEach(function(p){dotData.push({x:p[0],y:p[1],a:0,lm:true});});
+  }
+  function draw(){
+    dotFrame++;
+    ctx.clearRect(0,0,W,H);
+    var scanning=S.phase==='scanning';
+    if(!scanning){
+      dotData.forEach(function(d){
+        d.a=Math.max(0,Math.min(.18,d.a+(Math.random()>.6?.007:-.004)));
+        ctx.beginPath();ctx.arc(d.x,d.y,1.2,0,Math.PI*2);
+        ctx.fillStyle='rgba(0,220,170,'+d.a+')';ctx.fill();
+      });
+    }else{
+      var scanY=(cy-ry)+(S.prog/100)*(ry*2);
+      var g=ctx.createLinearGradient(0,scanY-28,0,scanY+5);
+      g.addColorStop(0,'rgba(0,255,180,0)');g.addColorStop(.65,'rgba(0,255,180,.07)');g.addColorStop(1,'rgba(0,255,180,.65)');
+      ctx.fillStyle=g;ctx.fillRect(0,scanY-28,W,33);
+      ctx.beginPath();ctx.moveTo(0,scanY);ctx.lineTo(W,scanY);
+      ctx.strokeStyle='rgba(0,255,180,.95)';ctx.lineWidth=1.8;ctx.stroke();
+      dotData.forEach(function(d){
+        var sc=d.y<=scanY;d.a+=((sc?1:0)-d.a)*.11;
+        var nr=Math.abs(d.y-scanY)<20,gl=nr?.5+.5*Math.sin(dotFrame*.5):0,a=Math.min(1,d.a+gl),r=d.lm?3.5:(sc?2:1.2);
+        ctx.beginPath();ctx.arc(d.x,d.y,r,0,Math.PI*2);
+        ctx.fillStyle=d.lm?'rgba(80,255,160,'+a+')':'rgba(0,210,180,'+a+')';ctx.fill();
+        if(d.lm&&a>.4){ctx.beginPath();ctx.arc(d.x,d.y,7,0,Math.PI*2);ctx.fillStyle='rgba(0,255,150,'+(a*.2)+')';ctx.fill();}
+      });
+      var lit=dotData.filter(function(d){return d.lm&&d.a>.3;});
+      if(lit.length>1){ctx.strokeStyle='rgba(0,255,180,.1)';ctx.lineWidth=.6;
+        for(var i=0;i<lit.length-1;i++){ctx.beginPath();ctx.moveTo(lit[i].x,lit[i].y);ctx.lineTo(lit[i+1].x,lit[i+1].y);ctx.stroke();}}
+      var bs=30;ctx.strokeStyle='rgba(0,255,180,.75)';ctx.lineWidth=2.5;
+      [[0,0,1,1],[W,0,-1,1],[0,H,1,-1],[W,H,-1,-1]].forEach(function(v){
+        ctx.beginPath();ctx.moveTo(v[0]+v[2]*bs,v[1]);ctx.lineTo(v[0],v[1]);ctx.lineTo(v[0],v[1]+v[3]*bs);ctx.stroke();
+      });
+      ctx.font='bold 10px monospace';ctx.fillStyle='rgba(0,255,180,.8)';
+      ctx.fillText('SCANNING '+Math.round(S.prog)+'%',10,17);
+    }
+    if(document.getElementById('dot-cv'))dotRAF=requestAnimationFrame(draw);
+  }
+  draw();
+}
+
+function getACtx(){
+  if(!aCtx)aCtx=new(window.AudioContext||window.webkitAudioContext)();
+  if(aCtx.state==='suspended')aCtx.resume();
+  return aCtx;
+}
+function playMusic(){
+  stopMusic();
+  try{
+    var ctx=getACtx(),bpm=142,beat=60/bpm;
+    function kick(t){var o=ctx.createOscillator(),g=ctx.createGain();o.frequency.setValueAtTime(140,t);o.frequency.exponentialRampToValueAtTime(.01,t+.28);g.gain.setValueAtTime(.7,t);g.gain.exponentialRampToValueAtTime(.001,t+.28);o.connect(g);g.connect(ctx.destination);o.start(t);o.stop(t+.3);}
+    function snare(t){var buf=ctx.createBuffer(1,Math.floor(ctx.sampleRate*.13),ctx.sampleRate),d=buf.getChannelData(0);for(var i=0;i<d.length;i++)d[i]=(Math.random()*2-1)*.4;var s=ctx.createBufferSource(),g=ctx.createGain();g.gain.setValueAtTime(.3,t);g.gain.exponentialRampToValueAtTime(.001,t+.13);s.buffer=buf;s.connect(g);g.connect(ctx.destination);s.start(t);s.stop(t+.14);}
+    var an=[261,311,392,466,523,466,415,349];
+    function arp(t,i){var o=ctx.createOscillator(),g=ctx.createGain();o.type='sawtooth';o.frequency.value=an[i%an.length];g.gain.setValueAtTime(.035,t);g.gain.exponentialRampToValueAtTime(.001,t+beat*.45);o.connect(g);g.connect(ctx.destination);o.start(t);o.stop(t+beat*.5);}
+    var now=ctx.currentTime+.05,step=0;
+    function sched(){while(now<ctx.currentTime+.6){if(step%4===0)kick(now);if(step%4===2)snare(now);arp(now,step);now+=beat/2;step++;}}
+    sched();mInt=setInterval(sched,250);
+  }catch(e){}
+}
+function playWin(){
+  stopMusic();
+  try{
+    var ctx=getACtx();
+    [[261,.05],[329,.2],[392,.35],[523,.5],[659,.7],[784,.9]].forEach(function(v){
+      var o=ctx.createOscillator(),g=ctx.createGain(),st=ctx.currentTime+v[1];
+      o.type='triangle';o.frequency.value=v[0];
+      g.gain.setValueAtTime(0,st);g.gain.linearRampToValueAtTime(.16,st+.05);g.gain.exponentialRampToValueAtTime(.001,st+.65);
+      o.connect(g);g.connect(ctx.destination);o.start(st);o.stop(st+.7);
+    });
+  }catch(e){}
+}
+function stopMusic(){if(mInt){clearInterval(mInt);mInt=null;}}
+
+function sCol(s){return s>=75?'#00ffb3':s>=50?'#ffcc00':'#ff4d00';}
+function ring(score,size){
+  var r=size/2-9,circ=2*Math.PI*r,col=sCol(score),dash=(score/100)*circ;
+  return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 '+size+' '+size+'">'
+    +'<circle cx="'+size/2+'" cy="'+size/2+'" r="'+r+'" fill="none" stroke="#111" stroke-width="8"/>'
+    +'<circle cx="'+size/2+'" cy="'+size/2+'" r="'+r+'" fill="none" stroke="'+col+'" stroke-width="8" stroke-dasharray="'+dash+' '+circ+'" stroke-linecap="round" transform="rotate(-90 '+size/2+' '+size/2+')" style="transition:stroke-dasharray 1.3s ease"/>'
+    +'<text x="'+size/2+'" y="'+(size/2+3)+'" text-anchor="middle" dominant-baseline="middle" style="font-family:Orbitron,sans-serif;font-weight:900;font-size:'+(size*.22)+'px;fill:'+col+'">'+score+'</text>'
+    +'</svg>';
+}
+function bar(label,score,delay){
+  var col=sCol(score);
+  return '<div class="bar"><div class="bl"><span style="color:#555">'+label+'</span><span style="color:'+col+';font-weight:700">'+score+'</span></div>'
+    +'<div class="bt"><div class="bf" data-w="'+score+'" style="background:linear-gradient(90deg,#ff4d00,'+col+');transition-delay:'+delay+'s"></div></div></div>';
+}
+</script>
+</body>
+</html>
